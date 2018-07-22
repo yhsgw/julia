@@ -91,6 +91,26 @@ function catch_backtrace()
     return _reformat_bt(bt[], bt2[])
 end
 
+"""
+    catch_stack(; [inclue_bt=true])
+
+Get the stack of exceptions currently being handled. For nested catch blocks
+there may be more than one current exception in which case the most recent
+exception is last in the stack. The stack is returned as a Vector of
+`(exception,backtrace)` pairs, or a Vector of exceptions only if `include_bt`
+is false.
+"""
+function catch_stack(; include_bt=true)
+    raw = ccall(:jl_get_exc_stack, Any, (Cint,Cint), include_bt, typemax(Cint))
+    formatted = Any[]
+    stride = include_bt ? 3 : 1
+    for i = reverse(1:stride:length(raw))
+        e = raw[i]
+        push!(formatted, include_bt ? (e,Base._reformat_bt(raw[i+1],raw[i+2])) : e)
+    end
+    formatted
+end
+
 ## keyword arg lowering generates calls to this ##
 function kwerr(kw, args::Vararg{Any,N}) where {N}
     @_noinline_meta
