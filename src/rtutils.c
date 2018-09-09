@@ -219,6 +219,7 @@ JL_DLLEXPORT void jl_enter_handler(jl_handler_t *eh)
     // Must have no safepoint
     eh->prev = current_task->eh;
     eh->gcstack = ptls->pgcstack;
+    eh->exc_stack_top = ptls->exc_stack->top;
 #ifdef JULIA_ENABLE_THREADING
     eh->gc_state = ptls->gc_state;
     eh->locks_len = current_task->locks.len;
@@ -232,7 +233,12 @@ JL_DLLEXPORT void jl_enter_handler(jl_handler_t *eh)
 #endif
 }
 
-STATIC_INLINE void jl_eh_restore_state(jl_handler_t *eh)
+// Restore thread local state to saved state in error handler `eh`.
+// This is executed in two circumstances:
+// * We leave a try block through normal control flow
+// * An exception causes a nonlocal jump to the catch block. In this case
+//   there's additional cleanup required, eg pushing the exception stack.
+JL_DLLEXPORT void jl_eh_restore_state(jl_handler_t *eh)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
 #ifdef _OS_WINDOWS_
@@ -242,7 +248,7 @@ STATIC_INLINE void jl_eh_restore_state(jl_handler_t *eh)
     }
 #endif
     jl_task_t *current_task = ptls->current_task;
-    // `eh` may not be `ptls->current_task->eh`. See `jl_pop_handler`
+    // `eh` may be not equal to `ptls->current_task->eh`. See `jl_pop_handler`
     // This function should **NOT** have any safepoint before the ones at the
     // end.
     sig_atomic_t old_defer_signal = ptls->defer_signal;
@@ -268,6 +274,7 @@ STATIC_INLINE void jl_eh_restore_state(jl_handler_t *eh)
         jl_sigint_safepoint(ptls);
     }
 }
+
 JL_DLLEXPORT void jl_pop_handler(int n)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
@@ -279,24 +286,15 @@ JL_DLLEXPORT void jl_pop_handler(int n)
     jl_eh_restore_state(eh);
 }
 
-JL_DLLEXPORT void jl_eh_pop_exc(jl_handler_t *eh)
+JL_DLLEXPORT void jl_restore_exc_stack(size_t prev_top)
 {
-    // FIXME: exstack not stack allocated... so we must manage the memory
-    // explicitly
-    //ptls->exstack = eh->exstack;
+    jl_ptls_t ptls = jl_get_ptls_states();
+    assert(ptls->exc_stack->top >= prev_top);
+    ptls->exc_stack->top = prev_top;
 }
 
 JL_DLLEXPORT jl_value_t *jl_apply_with_saved_exception_state(jl_value_t **args, uint32_t nargs, int drop_exceptions)
 {
-    jl_ptls_t ptls = jl_get_ptls_states();
-    jl_value_t *exc = ptls->exception_in_transit;
-    jl_array_t *bt = NULL;
-    jl_array_t *bt2 = NULL;
-    JL_GC_PUSH3(&exc, &bt, &bt2);
-    if (ptls->bt_size > 0) {
-        jl_get_backtrace(&bt, &bt2);
-        ptls->bt_size = 0;
-    }
     jl_value_t *v;
     JL_TRY {
         v = jl_apply(args, nargs);
@@ -304,51 +302,41 @@ JL_DLLEXPORT jl_value_t *jl_apply_with_saved_exception_state(jl_value_t **args, 
     JL_CATCH {
         if (!drop_exceptions) {
             jl_printf(JL_STDERR, "Internal error: encountered unexpected error in runtime:\n");
-            jl_static_show(JL_STDERR, ptls->exception_in_transit);
+            jl_static_show(JL_STDERR, jl_current_exception());
             jl_printf(JL_STDERR, "\n");
             jlbacktrace(); // written to STDERR_FILENO
         }
         v = NULL;
     }
-    ptls->exception_in_transit = exc;
-    if (bt != NULL) {
-        // This is sufficient because bt2 roots the gc-managed values
-        memcpy(ptls->bt_data, bt->data, jl_array_len(bt) * sizeof(void*));
-        ptls->bt_size = jl_array_len(bt);
-    }
-    JL_GC_POP();
     return v;
 }
 
-jl_exc_stack_t *jl_init_exc_stack(size_t reserved_size)
+void jl_copy_exc_stack(jl_exc_stack_t *dest, jl_exc_stack_t *src)
 {
-    jl_exc_stack_t *stack = (jl_exc_stack_t*)malloc(sizeof(jl_exc_stack_t) +
-                                                    sizeof(uintptr_t)*reserved_size);
-    stack->top = 0;
-    stack->reserved_size = reserved_size;
-    return stack;
+    assert(dest->reserved_size >= src->top);
+    memcpy(jl_excstk_raw(dest), jl_excstk_raw(src), sizeof(uintptr_t)*src->top);
+    dest->top = src->top;
+}
+
+void jl_reserve_exc_stack(jl_exc_stack_t **stack, size_t reserved_size)
+{
+    jl_exc_stack_t *s = *stack;
+    if (s && s->reserved_size >= reserved_size)
+        return;
+    size_t bufsz = sizeof(jl_exc_stack_t) + sizeof(uintptr_t)*reserved_size;
+    jl_exc_stack_t *new_s = (jl_exc_stack_t*)jl_gc_alloc_buf(jl_get_ptls_states(), bufsz);
+    new_s->top = 0;
+    if (s)
+        jl_copy_exc_stack(new_s, s);
+    new_s->reserved_size = reserved_size;
+    *stack = new_s;
 }
 
 void jl_push_exc_stack(jl_exc_stack_t **stack, jl_value_t *exception,
-                       uintptr_t *bt_data, size_t bt_size, int allow_alloc)
+                       uintptr_t *bt_data, size_t bt_size)
 {
     jl_exc_stack_t *s = *stack;
-    size_t required_size = s->top + bt_size + 2;
-    if (s->reserved_size < required_size) {
-        jl_exc_stack_t *new_s = NULL;
-        if (allow_alloc) {
-            new_s = (jl_exc_stack_t*)realloc(s, sizeof(jl_exc_stack_t) +
-                                                sizeof(uintptr_t)*required_size);
-        }
-        if (new_s == NULL) {
-            // Not a lot we can do here.
-            // TODO: print a warning, or print the stack?
-            return;
-        }
-        s = new_s;
-        s->reserved_size = required_size;
-        *stack = new_s;
-    }
+    jl_reserve_exc_stack(stack, (s ? s->top : 0) + bt_size + 2);
     memcpy(jl_excstk_raw(s) + s->top, bt_data, sizeof(uintptr_t)*bt_size);
     s->top += bt_size + 2;
     jl_excstk_raw(s)[s->top-2] = bt_size;

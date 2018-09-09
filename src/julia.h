@@ -446,6 +446,7 @@ typedef struct _jl_module_t {
     JL_DATA_TYPE
     jl_sym_t *name;
     struct _jl_module_t *parent;
+    // hidden fields:
     htable_t bindings;
     arraylist_t usings;  // modules with all bindings potentially imported
     uint64_t build_id;
@@ -1202,6 +1203,7 @@ JL_DLLEXPORT int jl_get_size(jl_value_t *val, size_t *pnt);
 #define jl_box_long(x)   jl_box_int64(x)
 #define jl_box_ulong(x)  jl_box_uint64(x)
 #define jl_unbox_long(x) jl_unbox_int64(x)
+#define jl_unbox_ulong(x) jl_unbox_uint64(x)
 #define jl_is_long(x)    jl_is_int64(x)
 #define jl_long_type     jl_int64_type
 #define jl_ulong_type    jl_uint64_type
@@ -1209,6 +1211,7 @@ JL_DLLEXPORT int jl_get_size(jl_value_t *val, size_t *pnt);
 #define jl_box_long(x)   jl_box_int32(x)
 #define jl_box_ulong(x)  jl_box_uint32(x)
 #define jl_unbox_long(x) jl_unbox_int32(x)
+#define jl_unbox_ulong(x) jl_unbox_uint32(x)
 #define jl_is_long(x)    jl_is_int32(x)
 #define jl_long_type     jl_int32_type
 #define jl_ulong_type    jl_uint32_type
@@ -1421,6 +1424,10 @@ JL_DLLEXPORT void JL_NORETURN jl_bounds_error_tuple_int(jl_value_t **v,
 JL_DLLEXPORT void JL_NORETURN jl_bounds_error_unboxed_int(void *v, jl_value_t *vt, size_t i);
 JL_DLLEXPORT void JL_NORETURN jl_bounds_error_ints(jl_value_t *v, size_t *idxs, size_t nidxs);
 JL_DLLEXPORT void JL_NORETURN jl_eof_error(void);
+// Return the exception currently being handled, or nothing if we are not
+// inside the scope of a JL_CATCH.  Note that catch scope is determined
+// dynamically so this works in functions called from a catch block.
+JL_DLLEXPORT jl_value_t *jl_current_exception(void);
 JL_DLLEXPORT jl_value_t *jl_exception_occurred(void);
 JL_DLLEXPORT void jl_exception_clear(void) JL_NOTSAFEPOINT;
 
@@ -1582,6 +1589,7 @@ typedef struct _jl_handler_t {
     jl_jmp_buf eh_ctx;
     jl_gcframe_t *gcstack;
     struct _jl_handler_t *prev;
+    size_t exc_stack_top;
     int8_t gc_state;
 #ifdef JULIA_ENABLE_THREADING
     size_t locks_len;
@@ -1635,6 +1643,7 @@ JL_DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, size_t ssize);
 JL_DLLEXPORT void jl_switchto(jl_task_t **pt);
 JL_DLLEXPORT void JL_NORETURN jl_throw(jl_value_t *e JL_MAYBE_UNROOTED);
 JL_DLLEXPORT void JL_NORETURN jl_rethrow(void);
+JL_DLLEXPORT void JL_NORETURN jl_sig_throw(void);
 JL_DLLEXPORT void JL_NORETURN jl_rethrow_other(jl_value_t *e JL_MAYBE_UNROOTED);
 JL_DLLEXPORT void JL_NORETURN jl_no_exc_handler(jl_value_t *e);
 
@@ -1643,6 +1652,7 @@ JL_DLLEXPORT void JL_NORETURN jl_no_exc_handler(jl_value_t *e);
 JL_DLLEXPORT void jl_enter_handler(jl_handler_t *eh);
 JL_DLLEXPORT void jl_eh_restore_state(jl_handler_t *eh);
 JL_DLLEXPORT void jl_pop_handler(int n);
+JL_DLLEXPORT void jl_restore_exc_stack(size_t prev_top);
 
 #if defined(_OS_WINDOWS_)
 #if defined(_COMPILER_MINGW_)
@@ -1688,7 +1698,7 @@ extern int had_exception;
 
 #define JL_CATCH                                                \
     else                                                        \
-        for (i__ca=1, jl_eh_restore_state(&__eh); i__ca; i__ca=0)
+        for (i__ca=1, jl_eh_restore_state(&__eh); i__ca; i__ca=0, jl_restore_exc_stack(__eh.exc_stack_top))
 
 #endif
 
@@ -1892,8 +1902,6 @@ typedef struct {
 #define jl_current_module (jl_get_ptls_states()->current_module)
 #define jl_current_task (jl_get_ptls_states()->current_task)
 #define jl_root_task (jl_get_ptls_states()->root_task)
-#define jl_exception_in_transit (jl_get_ptls_states()->exception_in_transit)
-
 
 // codegen interface ----------------------------------------------------------
 

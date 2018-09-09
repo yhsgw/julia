@@ -13,6 +13,7 @@
 #include "julia.h"
 #include "options.h"
 #include "julia_assert.h"
+#include "julia_internal.h"
 
 #ifdef __cplusplus
 #include <cfenv>
@@ -103,17 +104,20 @@ JL_DLLEXPORT jl_value_t *jl_eval_string(const char *str)
     return r;
 }
 
+JL_DLLEXPORT jl_value_t *jl_current_exception(void)
+{
+    jl_exc_stack_t *s = jl_get_ptls_states()->exc_stack;
+    return s->top != 0 ? jl_exc_stack_exception(s, s->top) : jl_nothing;
+}
+
 JL_DLLEXPORT jl_value_t *jl_exception_occurred(void)
 {
-    jl_ptls_t ptls = jl_get_ptls_states();
-    return ptls->exception_in_transit == jl_nothing ? NULL :
-        ptls->exception_in_transit;
+    return jl_get_ptls_states()->previous_exception;
 }
 
 JL_DLLEXPORT void jl_exception_clear(void)
 {
-    jl_ptls_t ptls = jl_get_ptls_states();
-    ptls->exception_in_transit = jl_nothing;
+    jl_get_ptls_states()->previous_exception = NULL;
 }
 
 // get the name of a type as a string

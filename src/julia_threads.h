@@ -80,12 +80,13 @@ typedef struct {
     jl_gc_mark_data_t *data_stack;
 } jl_gc_mark_cache_t;
 
+typedef struct _jl_exc_stack_t jl_exc_stack_t;
 // This includes all the thread local states we care about for a thread.
+// Changes to TLS field types must be reflected in codegen.
 #define JL_MAX_BT_SIZE 80000
 struct _jl_tls_states_t {
     struct _jl_gcframe_t *pgcstack;
     size_t world_age;
-    struct _jl_value_t *exception_in_transit;
     volatile size_t *safepoint;
     // Whether it is safe to execute GC at the same time.
 #define JL_GC_STATE_WAITING 1
@@ -107,9 +108,13 @@ struct _jl_tls_states_t {
     jl_jmp_buf base_ctx; // base context of stack
     jl_jmp_buf *safe_restore;
     int16_t tid;
-    size_t bt_size;
-    // JL_MAX_BT_SIZE + 1 elements long
-    uintptr_t *bt_data;
+    // Temp storage for exception thrown in signal handler. Not rooted.
+    struct _jl_value_t *sig_exception;
+    // Temporary backtrace buffer.
+    uintptr_t *bt_data; // JL_MAX_BT_SIZE + 1 elements long
+    size_t bt_size;    // Size for backtrace in transit in bt_data
+    // Stack of exceptions being handled by task.
+    jl_exc_stack_t *exc_stack;
     // Atomically set by the sender, reset by the handler.
     volatile sig_atomic_t signal_request;
     // Allow the sigint to be raised asynchronously
@@ -134,6 +139,9 @@ struct _jl_tls_states_t {
     int finalizers_inhibited;
     arraylist_t finalizers;
     jl_gc_mark_cache_t gc_cache;
+    // Saved exception for previous external API call or NULL if cleared.
+    // Access via jl_exception_occurred().
+    struct _jl_value_t *previous_exception;
 };
 
 // Update codegen version in `ccall.cpp` after changing either `pause` or `wake`

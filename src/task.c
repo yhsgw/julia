@@ -236,17 +236,11 @@ static void JL_NORETURN finish_task(jl_task_t *t, jl_value_t *resultval JL_MAYBE
             jl_apply(args, 2);
         }
         JL_CATCH {
-            jl_no_exc_handler(jl_exception_in_transit);
+            jl_no_exc_handler(jl_current_exception());
         }
     }
     gc_debug_critical_error();
     abort();
-}
-
-static void record_backtrace(void) JL_NOTSAFEPOINT
-{
-    jl_ptls_t ptls = jl_get_ptls_states();
-    ptls->bt_size = rec_backtrace(ptls->bt_data, JL_MAX_BT_SIZE);
 }
 
 static void NOINLINE JL_NORETURN JL_USED_FUNC start_task(void)
@@ -257,7 +251,6 @@ static void NOINLINE JL_NORETURN JL_USED_FUNC start_task(void)
     jl_value_t *res;
     t->started = 1;
     if (t->exception != jl_nothing) {
-        record_backtrace();
         res = t->exception;
     }
     else {
@@ -271,7 +264,8 @@ static void NOINLINE JL_NORETURN JL_USED_FUNC start_task(void)
             res = jl_apply(&t->start, 1);
         }
         JL_CATCH {
-            res = ptls->exception_in_transit;
+            // TODO: Persist exception stack as above?
+            res = jl_current_exception();
             t->exception = res;
             jl_gc_wb(t, res);
         }
@@ -545,14 +539,18 @@ JL_DLLEXPORT JL_NORETURN void jl_no_exc_handler(jl_value_t *e) JL_NOTSAFEPOINT
 }
 
 // yield to exception handler
-void JL_NORETURN throw_internal(jl_value_t *e JL_MAYBE_UNROOTED)
+void JL_NORETURN throw_internal(jl_value_t *exception JL_MAYBE_UNROOTED,
+                                uintptr_t* bt_data, size_t bt_size)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
     ptls->io_wait = 0;
     if (ptls->safe_restore)
         jl_longjmp(*ptls->safe_restore, 1);
-    assert(e != NULL);
-    ptls->exception_in_transit = e;
+    if (exception) {
+        // Persist exception in transit before a new one can be generated.
+        jl_push_exc_stack(&ptls->exc_stack, exception, bt_data, bt_size);
+    }
+    assert(ptls->exc_stack->top);
     jl_gc_unsafe_enter(ptls);
     jl_handler_t *eh = ptls->current_task->eh;
     if (eh != NULL) {
@@ -566,7 +564,7 @@ void JL_NORETURN throw_internal(jl_value_t *e JL_MAYBE_UNROOTED)
         jl_longjmp(eh->eh_ctx, 1);
     }
     else {
-        jl_no_exc_handler(e);
+        jl_no_exc_handler(exception);
     }
     assert(0);
 }
@@ -576,20 +574,35 @@ JL_DLLEXPORT void jl_throw(jl_value_t *e)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
     assert(e != NULL);
-    if (!ptls->safe_restore)
-        record_backtrace();
-    throw_internal(e);
+    if (ptls->safe_restore)
+        throw_internal(NULL, NULL, 0);
+    size_t bt_size = rec_backtrace(ptls->bt_data, JL_MAX_BT_SIZE);
+    throw_internal(e, ptls->bt_data, bt_size);
 }
 
+// rethrow with current exc_stack state
 JL_DLLEXPORT void jl_rethrow(void)
 {
+    throw_internal(NULL, NULL, 0);
+}
+
+JL_DLLEXPORT void jl_sig_throw(void)
+{
     jl_ptls_t ptls = jl_get_ptls_states();
-    throw_internal(ptls->exception_in_transit);
+    jl_value_t *e = ptls->sig_exception;
+    assert(e);
+    throw_internal(e, ptls->bt_data, ptls->bt_size);
 }
 
 JL_DLLEXPORT void jl_rethrow_other(jl_value_t *e)
 {
-    throw_internal(e);
+    // TODO: Uses of this function could be replaced with jl_throw
+    // if we rely on exc_stack for root cause analysis.
+    jl_ptls_t ptls = jl_get_ptls_states();
+    assert(ptls->exc_stack->top != 0);
+    // overwrite exception on top of stack. see jl_exc_stack_exception
+    jl_excstk_raw(ptls->exc_stack)[ptls->exc_stack->top-1] = (uintptr_t)e;
+    jl_rethrow();
 }
 
 JL_DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, size_t ssize)
@@ -743,8 +756,6 @@ void jl_init_root_task(void *stack, size_t ssize)
 #endif
 
     ptls->root_task = ptls->current_task;
-
-    ptls->exception_in_transit = (jl_value_t*)jl_nothing;
 }
 
 JL_DLLEXPORT int jl_is_task_started(jl_task_t *t)

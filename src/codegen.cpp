@@ -287,7 +287,9 @@ static Function *jlgetfield_func;
 static Function *jlmethod_func;
 static Function *jlgenericfunction_func;
 static Function *jlenter_func;
+static Function *jlcurrent_exception_func;
 static Function *jlleave_func;
+static Function *jl_restore_exc_stack_func;
 static Function *jlegal_func;
 static Function *jl_alloc_obj_func;
 static Function *jl_newbits_func;
@@ -782,9 +784,8 @@ static void emit_write_barrier(jl_codectx_t&, Value*, Value*);
 
 static void jl_rethrow_with_add(const char *fmt, ...)
 {
-    jl_ptls_t ptls = jl_get_ptls_states();
-    if (jl_typeis(ptls->exception_in_transit, jl_errorexception_type)) {
-        char *str = jl_string_data(jl_fieldref(ptls->exception_in_transit,0));
+    if (jl_typeis(jl_current_exception(), jl_errorexception_type)) {
+        char *str = jl_string_data(jl_fieldref(jl_current_exception(),0));
         char buf[1024];
         va_list args;
         va_start(args, fmt);
@@ -3761,7 +3762,9 @@ static void emit_stmtpos(jl_codectx_t &ctx, jl_value_t *expr, int ssaval_result)
                            ConstantInt::get(T_int32, jl_unbox_long(args[0])));
     }
     else if (head == pop_exc_sym) {
-        // FIXME
+        jl_cgval_t exc_stack_top = emit_expr(ctx, jl_exprarg(expr, 0));
+        assert(exc_stack_top.V && exc_stack_top.V->getType() == T_size);
+        ctx.builder.CreateCall(prepare_call(jl_restore_exc_stack_func), exc_stack_top.V);
         return;
     }
     else {
@@ -3916,8 +3919,7 @@ static jl_cgval_t emit_expr(jl_codectx_t &ctx, jl_value_t *expr, ssize_t ssaval)
                 bnd = jl_get_binding_for_method_def(mod, (jl_sym_t*)mn);
             }
             JL_CATCH {
-                jl_ptls_t ptls = jl_get_ptls_states();
-                jl_value_t *e = ptls->exception_in_transit;
+                jl_value_t *e = jl_current_exception();
                 // errors. boo. root it somehow :(
                 bnd = jl_get_binding_wr(ctx.module, (jl_sym_t*)jl_gensym(), 1);
                 bnd->value = e;
@@ -3986,9 +3988,9 @@ static jl_cgval_t emit_expr(jl_codectx_t &ctx, jl_value_t *expr, ssize_t ssaval)
         Value *val = emit_jlcall(ctx, jlnew_func, typ, &argv[1], nargs - 1);
         return mark_julia_type(ctx, val, true, ty);
     }
-    else if (head == exc_sym) { // *ptls->exception_in_transit
+    else if (head == exc_sym) {
         return mark_julia_type(ctx,
-                ctx.builder.CreateLoad(emit_exc_in_transit(ctx), /*isvolatile*/true),
+                ctx.builder.CreateCall(prepare_call(jlcurrent_exception_func)),
                 true, jl_any_type);
     }
     else if (head == copyast_sym) {
@@ -6179,6 +6181,13 @@ static std::unique_ptr<Module> emit_function(
 
             assert(jl_is_long(args[0]));
             int lname = jl_unbox_long(args[0]);
+            // Save exception stack depth at enter for use in pop_exc
+            Value *exc_stack_top = ctx.builder.CreateLoad(emit_pexc_stack_top(ctx),
+                                                          "exc_stack_top");
+            assert(!ctx.ssavalue_assigned.at(cursor));
+            ctx.SAvalues.at(cursor) = jl_cgval_t(exc_stack_top, NULL, false,
+                                                 (jl_value_t*)jl_ulong_type, NULL);
+            ctx.ssavalue_assigned.at(cursor) = true;
             CallInst *sj = ctx.builder.CreateCall(prepare_call(except_enter_func));
             // We need to mark this on the call site as well. See issue #6757
             sj->setCanReturnTwice();
@@ -6333,6 +6342,7 @@ static std::unique_ptr<Module> emit_function(
                     }
                 }
                 assert(found);
+                (void)found;
             }
             else {
                 terminator->removeFromParent();
@@ -7078,6 +7088,12 @@ static void init_julia_llvm_env(Module *m)
                          "jl_enter_handler", m);
     add_named_global(jlenter_func, &jl_enter_handler);
 
+    jlcurrent_exception_func =
+        Function::Create(FunctionType::get(T_prjlvalue, false),
+                         Function::ExternalLinkage,
+                         "jl_current_exception", m);
+    add_named_global(jlcurrent_exception_func, &jl_current_exception);
+
 #ifdef _OS_WINDOWS_
 #if defined(_CPU_X86_64_)
     juliapersonality_func = Function::Create(FunctionType::get(T_int32, true),
@@ -7116,6 +7132,12 @@ static void init_julia_llvm_env(Module *m)
                          Function::ExternalLinkage,
                          "jl_pop_handler", m);
     add_named_global(jlleave_func, &jl_pop_handler);
+
+    jl_restore_exc_stack_func =
+        Function::Create(FunctionType::get(T_void, T_size, false),
+                         Function::ExternalLinkage,
+                         "jl_restore_exc_stack", m);
+    add_named_global(jl_restore_exc_stack_func, &jl_restore_exc_stack);
 
     std::vector<Type *> args_2vals_callee_rooted(0);
     args_2vals_callee_rooted.push_back(PointerType::get(T_jlvalue, AddressSpace::CalleeRooted));
