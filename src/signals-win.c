@@ -204,6 +204,7 @@ static LONG WINAPI _exception_handler(struct _EXCEPTION_POINTERS *ExceptionInfo,
                     ExceptionInfo->ContextRecord,in_ctx);
                 return EXCEPTION_CONTINUE_EXECUTION;
             case EXCEPTION_STACK_OVERFLOW:
+                ptls->needs_resetstkoflw = 1;
                 jl_throw_in_ctx(jl_stackovf_exception,
                     ExceptionInfo->ContextRecord,in_ctx&&pSetThreadStackGuarantee);
                 return EXCEPTION_CONTINUE_EXECUTION;

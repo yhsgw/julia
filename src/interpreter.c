@@ -624,10 +624,6 @@ SECT_INTERP static jl_value_t *eval_body(jl_array_t *stmts, interpreter_state *s
                     continue;
                 }
                 else {
-#ifdef _OS_WINDOWS_
-                    if (jl_get_ptls_states()->exception_in_transit == jl_stackovf_exception)
-                        _resetstkoflw();
-#endif
                     s->ip = jl_unbox_long(jl_exprarg(stmt, 0)) - 1;
                     continue;
                 }
