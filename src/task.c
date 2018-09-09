@@ -251,6 +251,9 @@ static void NOINLINE JL_NORETURN JL_USED_FUNC start_task(void)
     jl_value_t *res;
     t->started = 1;
     if (t->exception != jl_nothing) {
+        size_t bt_size = rec_backtrace(ptls->bt_data, JL_MAX_BT_SIZE);
+        jl_reserve_exc_stack(&t->exc_stack, bt_size+2);
+        jl_push_exc_stack(&t->exc_stack, t->exception, ptls->bt_data, bt_size);
         res = t->exception;
     }
     else {
@@ -309,14 +312,32 @@ static void ctx_switch(jl_ptls_t ptls, jl_task_t **pt)
         jl_timing_block_stop(blk);
 #endif
     if (!jl_setjmp(ptls->current_task->ctx, 0)) {
-        // backtraces don't survive task switches, see e.g. issue #12485
-        ptls->bt_size = 0;
         jl_task_t *lastt = ptls->current_task;
+
+        // Swap exception stacks. Note that the state must be left consistent
+        // if allocations throw, so we reserve space before doing anything else.
+        if (ptls->exc_stack->top) {
+            // May throw
+            jl_reserve_exc_stack(&lastt->exc_stack, ptls->exc_stack->top);
+        }
+        if (t->exc_stack && t->exc_stack->top) {
+            // Only necessary if t->exc_stack was run on a different thread.
+            jl_reserve_exc_stack(&ptls->exc_stack, t->exc_stack->top);
+        }
+
 #ifdef COPY_STACKS
         save_stack(ptls, lastt, pt); // allocates (gc-safepoint, and can also fail)
 #else
         *pt = lastt; // can't fail after here: clear the gc-root for the target task now
 #endif
+        // Cannot throw.
+        if (ptls->exc_stack->top) {
+            jl_copy_exc_stack(lastt->exc_stack, ptls->exc_stack);
+        }
+        if (t->exc_stack && t->exc_stack->top) {
+            jl_copy_exc_stack(ptls->exc_stack, t->exc_stack);
+            t->exc_stack->top = 0;
+        }
 
         // set up global state for new task
         lastt->gcstack = ptls->pgcstack;
@@ -631,6 +652,7 @@ JL_DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, size_t ssize)
     // there is no active exception handler available on this stack yet
     t->eh = NULL;
     t->gcstack = NULL;
+    t->exc_stack = NULL;
     t->stkbuf = NULL;
     t->tid = 0;
     t->started = 0;
@@ -750,6 +772,7 @@ void jl_init_root_task(void *stack, size_t ssize)
     ptls->current_task->logstate = jl_nothing;
     ptls->current_task->eh = NULL;
     ptls->current_task->gcstack = NULL;
+    ptls->current_task->exc_stack = NULL;
     ptls->current_task->tid = ptls->tid;
 #ifdef JULIA_ENABLE_THREADING
     arraylist_new(&ptls->current_task->locks, 0);
