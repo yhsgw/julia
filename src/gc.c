@@ -1472,26 +1472,6 @@ STATIC_INLINE int gc_mark_queue_obj(jl_gc_mark_cache_t *gc_cache, gc_mark_sp_t *
     return (int)nptr;
 }
 
-// Mark and queue an exception stack to be scanned.
-void gc_mark_queue_scan_exc_stack(jl_gc_mark_cache_t *gc_cache, gc_mark_sp_t *sp,
-                                  jl_exc_stack_t* exc_stack)
-{
-    if (gc_marked(jl_astaggedvalue(exc_stack)->header)) {
-        return;
-    }
-    // TODO: Should we be testing `if (gc_marked(jl_astaggedvalue(exc_stack)->header))`?
-    // FIXME: How does gc_try_setmark differ from gc_setmark_buf_ ?
-    // What's the difference between a buffer and object?
-    // if (!gc_try_setmark((jl_value_t*)exc_stack, &nptr, &tag, &bits)) {
-    gc_setmark_buf_(jl_get_ptls_states(), exc_stack, 0,
-                    sizeof(exc_stack) + sizeof(uintptr_t)*exc_stack->reserved_size);
-    if (exc_stack->top == 0)
-        return;
-    gc_mark_exc_stack_t data = {exc_stack, exc_stack->top, 0};
-    gc_mark_stack_push(gc_cache, sp, gc_mark_label_addrs[GC_MARK_L_excstack],
-                       &data, sizeof(data), 1);
-}
-
 // Check if `nptr` is tagged for `old + refyoung`,
 // Push the object to the remset and update the `nptr` counter if necessary.
 STATIC_INLINE void gc_mark_push_remset(jl_ptls_t ptls, jl_value_t *obj, uintptr_t nptr) JL_NOTSAFEPOINT
@@ -1720,10 +1700,9 @@ STATIC_INLINE int gc_mark_scan_obj32(jl_ptls_t ptls, gc_mark_sp_t *sp, gc_mark_o
 // (OTOH, the spill will likely make use of the stack engine which is otherwise idle so
 //  the performance impact is minimum as long as it's not in the hottest path)
 
-// There are four external entry points to the loop, corresponding to labels `marked_obj`,
+// There are three external entry points to the loop, corresponding to labels `marked_obj`,
 // `scan_only`, `finlist` and `excstack` (see the corresponding functions
-// `gc_mark_queue_obj`, `gc_mark_queue_scan_obj`, `gc_mark_queue_finlist` and
-// `gc_mark_queue_scan_exc_stack` above).
+// `gc_mark_queue_obj`, `gc_mark_queue_scan_obj` and `gc_mark_queue_finlist` above).
 //
 // The scanning of the object starts with `goto mark`, which updates the metadata and scans
 // the object whose information is stored in `new_obj`, `tag` and `bits`.
@@ -2210,7 +2189,6 @@ mark: {
                                    &stackdata, sizeof(stackdata), 1);
             }
             if (ta->exc_stack) {
-                assert(ta->exc_stack->top > 0); // FIXME?
                 gc_setmark_buf_(ptls, ta->exc_stack, bits, sizeof(jl_exc_stack_t) +
                                 sizeof(uintptr_t)*ta->exc_stack->reserved_size);
                 gc_mark_exc_stack_t stackdata = {ta->exc_stack, ta->exc_stack->top, 0};
@@ -2315,7 +2293,6 @@ static void jl_gc_queue_thread_local(jl_gc_mark_cache_t *gc_cache, gc_mark_sp_t 
     gc_mark_queue_obj(gc_cache, sp, ptls2->root_task);
     if (ptls2->previous_exception)
         gc_mark_queue_obj(gc_cache, sp, ptls2->previous_exception);
-    gc_mark_queue_scan_exc_stack(gc_cache, sp, ptls2->exc_stack);
 }
 
 // mark the initial root set

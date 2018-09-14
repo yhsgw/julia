@@ -110,11 +110,9 @@ struct _jl_tls_states_t {
     int16_t tid;
     // Temp storage for exception thrown in signal handler. Not rooted.
     struct _jl_value_t *sig_exception;
-    // Temporary backtrace buffer.
+    // Temporary backtrace buffer. Scanned for gc roots when bt_size > 0.
     uintptr_t *bt_data; // JL_MAX_BT_SIZE + 1 elements long
     size_t bt_size;    // Size for backtrace in transit in bt_data
-    // Stack of exceptions being handled by task.
-    jl_exc_stack_t *exc_stack;
     // Atomically set by the sender, reset by the handler.
     volatile sig_atomic_t signal_request;
     // Allow the sigint to be raised asynchronously

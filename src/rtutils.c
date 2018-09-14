@@ -219,7 +219,6 @@ JL_DLLEXPORT void jl_enter_handler(jl_handler_t *eh)
     // Must have no safepoint
     eh->prev = current_task->eh;
     eh->gcstack = ptls->pgcstack;
-    eh->exc_stack_top = ptls->exc_stack->top;
 #ifdef JULIA_ENABLE_THREADING
     eh->gc_state = ptls->gc_state;
     eh->locks_len = current_task->locks.len;
@@ -286,11 +285,21 @@ JL_DLLEXPORT void jl_pop_handler(int n)
     jl_eh_restore_state(eh);
 }
 
-JL_DLLEXPORT void jl_restore_exc_stack(size_t prev_top)
+JL_DLLEXPORT size_t jl_exc_stack_state(void)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
-    assert(ptls->exc_stack->top >= prev_top);
-    ptls->exc_stack->top = prev_top;
+    jl_exc_stack_t *s = ptls->current_task->exc_stack;
+    return s ? s->top : 0;
+}
+
+JL_DLLEXPORT void jl_restore_exc_stack(size_t state)
+{
+    jl_ptls_t ptls = jl_get_ptls_states();
+    jl_exc_stack_t *s = ptls->current_task->exc_stack;
+    if (s) {
+        assert(s->top >= state);
+        s->top = state;
+    }
 }
 
 JL_DLLEXPORT jl_value_t *jl_apply_with_saved_exception_state(jl_value_t **args, uint32_t nargs, int drop_exceptions)
@@ -326,17 +335,17 @@ void jl_reserve_exc_stack(jl_exc_stack_t **stack, size_t reserved_size)
     size_t bufsz = sizeof(jl_exc_stack_t) + sizeof(uintptr_t)*reserved_size;
     jl_exc_stack_t *new_s = (jl_exc_stack_t*)jl_gc_alloc_buf(jl_get_ptls_states(), bufsz);
     new_s->top = 0;
+    new_s->reserved_size = reserved_size;
     if (s)
         jl_copy_exc_stack(new_s, s);
-    new_s->reserved_size = reserved_size;
     *stack = new_s;
 }
 
 void jl_push_exc_stack(jl_exc_stack_t **stack, jl_value_t *exception,
                        uintptr_t *bt_data, size_t bt_size)
 {
+    jl_reserve_exc_stack(stack, (*stack ? (*stack)->top : 0) + bt_size + 2);
     jl_exc_stack_t *s = *stack;
-    jl_reserve_exc_stack(stack, (s ? s->top : 0) + bt_size + 2);
     memcpy(jl_excstk_raw(s) + s->top, bt_data, sizeof(uintptr_t)*bt_size);
     s->top += bt_size + 2;
     jl_excstk_raw(s)[s->top-2] = bt_size;

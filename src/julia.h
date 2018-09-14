@@ -1589,7 +1589,6 @@ typedef struct _jl_handler_t {
     jl_jmp_buf eh_ctx;
     jl_gcframe_t *gcstack;
     struct _jl_handler_t *prev;
-    size_t exc_stack_top;
     int8_t gc_state;
 #ifdef JULIA_ENABLE_THREADING
     size_t locks_len;
@@ -1624,7 +1623,7 @@ typedef struct _jl_task_t {
     jl_handler_t *eh;
     // saved gc stack top for context switches
     jl_gcframe_t *gcstack;
-    // saved exception stack (NULL if empty)
+    // saved exception stack
     jl_exc_stack_t *exc_stack;
     // current module, or NULL if this task has not set one
     jl_module_t *current_module;
@@ -1654,7 +1653,8 @@ JL_DLLEXPORT void JL_NORETURN jl_no_exc_handler(jl_value_t *e);
 JL_DLLEXPORT void jl_enter_handler(jl_handler_t *eh);
 JL_DLLEXPORT void jl_eh_restore_state(jl_handler_t *eh);
 JL_DLLEXPORT void jl_pop_handler(int n);
-JL_DLLEXPORT void jl_restore_exc_stack(size_t prev_top);
+JL_DLLEXPORT size_t jl_exc_stack_state(void);
+JL_DLLEXPORT void jl_restore_exc_stack(size_t state);
 
 #if defined(_OS_WINDOWS_)
 #if defined(_COMPILER_MINGW_)
@@ -1694,13 +1694,14 @@ extern int had_exception;
 
 #define JL_TRY                                                    \
     int i__tr, i__ca; jl_handler_t __eh;                          \
+    size_t __exc_stack_state = jl_exc_stack_state();              \
     jl_enter_handler(&__eh);                                      \
     if (!jl_setjmp(__eh.eh_ctx,0))                                \
         for (i__tr=1; i__tr; i__tr=0, jl_eh_restore_state(&__eh))
 
 #define JL_CATCH                                                \
     else                                                        \
-        for (i__ca=1, jl_eh_restore_state(&__eh); i__ca; i__ca=0, jl_restore_exc_stack(__eh.exc_stack_top))
+        for (i__ca=1, jl_eh_restore_state(&__eh); i__ca; i__ca=0, jl_restore_exc_stack(__exc_stack_state))
 
 #endif
 
