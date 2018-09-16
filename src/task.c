@@ -589,6 +589,9 @@ JL_DLLEXPORT void jl_throw(jl_value_t *e)
 // rethrow with current exc_stack state
 JL_DLLEXPORT void jl_rethrow(void)
 {
+    jl_exc_stack_t *exc_stack = jl_get_ptls_states()->current_task->exc_stack;
+    if (!exc_stack || exc_stack->top == 0)
+        jl_error("rethrow() not allowed outside a catch block");
     throw_internal(NULL, NULL, 0);
 }
 
@@ -606,7 +609,8 @@ JL_DLLEXPORT void jl_rethrow_other(jl_value_t *e)
     // TODO: Uses of this function could be replaced with jl_throw
     // if we rely on exc_stack for root cause analysis.
     jl_exc_stack_t *exc_stack = jl_get_ptls_states()->current_task->exc_stack;
-    assert(exc_stack && exc_stack->top != 0);
+    if (!exc_stack || exc_stack->top == 0)
+        jl_error("rethrow(exc) not allowed outside a catch block");
     // overwrite exception on top of stack. see jl_exc_stack_exception
     jl_excstk_raw(exc_stack)[exc_stack->top-1] = (uintptr_t)e;
     jl_rethrow();
