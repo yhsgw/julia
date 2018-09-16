@@ -99,6 +99,7 @@ JL_DLLEXPORT jl_value_t *jl_eval_string(const char *str)
         jl_exception_clear();
     }
     JL_CATCH {
+        jl_get_ptls_states()->previous_exception = jl_current_exception();
         r = NULL;
     }
     return r;
@@ -171,6 +172,7 @@ JL_DLLEXPORT jl_value_t *jl_call(jl_function_t *f, jl_value_t **args, int32_t na
         jl_exception_clear();
     }
     JL_CATCH {
+        jl_get_ptls_states()->previous_exception = jl_current_exception();
         v = NULL;
     }
     return v;
@@ -189,6 +191,7 @@ JL_DLLEXPORT jl_value_t *jl_call0(jl_function_t *f)
         jl_exception_clear();
     }
     JL_CATCH {
+        jl_get_ptls_states()->previous_exception = jl_current_exception();
         v = NULL;
     }
     return v;
@@ -209,6 +212,7 @@ JL_DLLEXPORT jl_value_t *jl_call1(jl_function_t *f, jl_value_t *a)
         jl_exception_clear();
     }
     JL_CATCH {
+        jl_get_ptls_states()->previous_exception = jl_current_exception();
         v = NULL;
     }
     return v;
@@ -229,6 +233,7 @@ JL_DLLEXPORT jl_value_t *jl_call2(jl_function_t *f, jl_value_t *a, jl_value_t *b
         jl_exception_clear();
     }
     JL_CATCH {
+        jl_get_ptls_states()->previous_exception = jl_current_exception();
         v = NULL;
     }
     return v;
@@ -250,6 +255,7 @@ JL_DLLEXPORT jl_value_t *jl_call3(jl_function_t *f, jl_value_t *a,
         jl_exception_clear();
     }
     JL_CATCH {
+        jl_get_ptls_states()->previous_exception = jl_current_exception();
         v = NULL;
     }
     return v;
@@ -274,6 +280,7 @@ JL_DLLEXPORT jl_value_t *jl_get_field(jl_value_t *o, const char *fld)
         jl_exception_clear();
     }
     JL_CATCH {
+        jl_get_ptls_states()->previous_exception = jl_current_exception();
         v = NULL;
     }
     return v;
