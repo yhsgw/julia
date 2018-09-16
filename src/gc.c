@@ -263,7 +263,9 @@ void jl_gc_run_all_finalizers(jl_ptls_t ptls)
         jl_ptls_t ptls2 = jl_all_tls_states[i];
         schedule_all_finalizers(&ptls2->finalizers);
     }
+    ptls->in_finalizer = 1;
     run_finalizers(ptls);
+    ptls->in_finalizer = 0;
 }
 
 static void gc_add_finalizer_(jl_ptls_t ptls, void *v, void *f)
