@@ -1901,7 +1901,7 @@ excstack: {
         size_t i = stackitr->i;
         while (itr > 0) {
             size_t bt_size = jl_exc_stack_bt_size(exc_stack, itr);
-            uint64_t *bt_data = jl_exc_stack_bt_data(exc_stack, itr);
+            uintptr_t *bt_data = jl_exc_stack_bt_data(exc_stack, itr);
             while (i+2 < bt_size) {
                 if (bt_data[i] != (uintptr_t)-1) {
                     i++;
@@ -2472,6 +2472,18 @@ static void jl_gc_queue_remset(jl_gc_mark_cache_t *gc_cache, gc_mark_sp_t *sp, j
     ptls2->heap.rem_bindings.len = n_bnd_refyoung;
 }
 
+static void jl_gc_queue_bt_buf(jl_gc_mark_cache_t *gc_cache, gc_mark_sp_t *sp, jl_ptls_t ptls2)
+{
+    size_t n = 0;
+    while (n+2 < ptls2->bt_size) {
+        if (ptls2->bt_data[n] == (uintptr_t)-1) {
+            gc_mark_queue_obj(gc_cache, sp, (jl_value_t*)ptls2->bt_data[n+1]);
+            n += 2;
+        }
+        n++;
+    }
+}
+
 // Only one thread should be running in this function
 static int _jl_gc_collect(jl_ptls_t ptls, int full)
 {
@@ -2492,6 +2504,8 @@ static int _jl_gc_collect(jl_ptls_t ptls, int full)
         jl_gc_queue_remset(gc_cache, &sp, ptls2);
         // 2.2. mark every thread local root
         jl_gc_queue_thread_local(gc_cache, &sp, ptls2);
+        // 2.3. mark any managed objects in the backtrace buffer
+        jl_gc_queue_bt_buf(gc_cache, &sp, ptls2);
     }
 
     // 3. walk roots

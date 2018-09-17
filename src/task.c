@@ -251,8 +251,6 @@ static void NOINLINE JL_NORETURN JL_USED_FUNC start_task(void)
     jl_value_t *res;
     t->started = 1;
     if (t->exception != jl_nothing) {
-        size_t bt_size = rec_backtrace(ptls->bt_data, JL_MAX_BT_SIZE);
-        jl_push_exc_stack(&t->exc_stack, t->exception, ptls->bt_data, bt_size);
         res = t->exception;
     }
     else {
@@ -541,8 +539,7 @@ JL_DLLEXPORT JL_NORETURN void jl_no_exc_handler(jl_value_t *e) JL_NOTSAFEPOINT
 }
 
 // yield to exception handler
-void JL_NORETURN throw_internal(jl_value_t *exception JL_MAYBE_UNROOTED,
-                                uintptr_t* bt_data, size_t bt_size)
+void JL_NORETURN throw_internal(jl_value_t *exception JL_MAYBE_UNROOTED)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
     ptls->io_wait = 0;
@@ -550,11 +547,14 @@ void JL_NORETURN throw_internal(jl_value_t *exception JL_MAYBE_UNROOTED,
         jl_longjmp(*ptls->safe_restore, 1);
     jl_gc_unsafe_enter(ptls);
     if (exception) {
-        // Persist exception in transit before a new one can be generated.
+        // The temporary ptls->bt_data is rooted by special purpose code in the
+        // GC. This exists only for the purpose of preserving bt_data until we
+        // set ptls->bt_size=0 below.
         JL_GC_PUSH1(&exception);
-        // May allocate. FIXME: Ensure bt_data is rooted.
         assert(ptls->current_task);
-        jl_push_exc_stack(&ptls->current_task->exc_stack, exception, bt_data, bt_size);
+        jl_push_exc_stack(&ptls->current_task->exc_stack, exception,
+                          ptls->bt_data, ptls->bt_size);
+        ptls->bt_size = 0;
         JL_GC_POP();
     }
     assert(ptls->current_task->exc_stack && ptls->current_task->exc_stack->top);
@@ -581,9 +581,9 @@ JL_DLLEXPORT void jl_throw(jl_value_t *e)
     jl_ptls_t ptls = jl_get_ptls_states();
     assert(e != NULL);
     if (ptls->safe_restore)
-        throw_internal(NULL, NULL, 0);
-    size_t bt_size = rec_backtrace(ptls->bt_data, JL_MAX_BT_SIZE);
-    throw_internal(e, ptls->bt_data, bt_size);
+        throw_internal(NULL);
+    ptls->bt_size = rec_backtrace(ptls->bt_data, JL_MAX_BT_SIZE);
+    throw_internal(e);
 }
 
 // rethrow with current exc_stack state
@@ -592,28 +592,31 @@ JL_DLLEXPORT void jl_rethrow(void)
     jl_exc_stack_t *exc_stack = jl_get_ptls_states()->current_task->exc_stack;
     if (!exc_stack || exc_stack->top == 0)
         jl_error("rethrow() not allowed outside a catch block");
-    throw_internal(NULL, NULL, 0);
+    throw_internal(NULL);
 }
 
+// Special case throw for errors detected inside signal handlers.  This is not
+// (cannot be) called directly in the signal handler itself, but is returned to
+// after the signal handler exits.
 JL_DLLEXPORT void jl_sig_throw(void)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
     jl_value_t *e = ptls->sig_exception;
-    assert(e);
+    assert(e && ptls->bt_size != 0);
     ptls->sig_exception = NULL;
-    throw_internal(e, ptls->bt_data, ptls->bt_size);
+    throw_internal(e);
 }
 
 JL_DLLEXPORT void jl_rethrow_other(jl_value_t *e)
 {
-    // TODO: Uses of this function could be replaced with jl_throw
-    // if we rely on exc_stack for root cause analysis.
+    // TODO: Should uses of `rethrow(exc)` be replaced with a normal throw, now
+    // that exception stacks allow root cause analysis?
     jl_exc_stack_t *exc_stack = jl_get_ptls_states()->current_task->exc_stack;
     if (!exc_stack || exc_stack->top == 0)
         jl_error("rethrow(exc) not allowed outside a catch block");
     // overwrite exception on top of stack. see jl_exc_stack_exception
     jl_excstk_raw(exc_stack)[exc_stack->top-1] = (uintptr_t)e;
-    jl_rethrow();
+    throw_internal(NULL);
 }
 
 JL_DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, size_t ssize)

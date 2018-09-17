@@ -116,8 +116,6 @@ end
     @test length(Base.catch_stack()) == 0
     test_exc_stack_catch_break()
     try
-        # FIXME!! Running this with n=1000 aborts with a memory error.
-        # Likely due to the GC changes.
         test_exc_stack_deep(100)
     catch
         @test length(Base.catch_stack()) == 100

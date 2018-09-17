@@ -668,8 +668,8 @@ JL_DLLEXPORT size_t jl_capture_interp_frame(uintptr_t *data, uintptr_t sp, uintp
 typedef struct _jl_exc_stack_t {
     size_t top;
     size_t reserved_size;
-    // Pack all stack entries into a buffer to eliminate allocation during
-    // exception handling, at least in the common case.
+    // Pack all stack entries into a growable buffer to amortize allocation
+    // across repeated exception handling.
     // uintptr_t data[]; // Access with jl_excstk_raw
 #define jl_excstk_raw(stack) ((uintptr_t*)((char*)(stack) + sizeof(jl_exc_stack_t)))
 } jl_exc_stack_t;
