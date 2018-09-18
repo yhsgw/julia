@@ -5,33 +5,33 @@ using Test
     try
         error("A")
     catch
-        @test length(Base.catch_stack()) == 1
+        @test length(catch_stack()) == 1
     end
-    @test length(Base.catch_stack()) == 0
+    @test length(catch_stack()) == 0
     try
         try
             error("A")
         finally
-            @test length(Base.catch_stack()) == 1
+            @test length(catch_stack()) == 1
         end
     catch
-        @test length(Base.catch_stack()) == 1
+        @test length(catch_stack()) == 1
     end
     # Errors stack up
     try
         error("RootCause")
     catch
-        @test length(Base.catch_stack()) == 1
+        @test length(catch_stack()) == 1
         try
             error("B")
         catch
-            stack = Base.catch_stack()
+            stack = catch_stack()
             @test length(stack) == 2
             @test stack[1][1].msg == "RootCause"
             @test stack[2][1].msg == "B"
         end
         # Stack pops correctly
-        stack = Base.catch_stack()
+        stack = catch_stack()
         @test length(stack) == 1
         @test stack[1][1].msg == "RootCause"
     end
@@ -39,7 +39,7 @@ using Test
     val = try
         error("A")
     catch
-        @test length(Base.catch_stack()) == 1
+        @test length(catch_stack()) == 1
         1
     end
     @test val == 1
@@ -48,11 +48,11 @@ using Test
         try
             error("A")
         catch
-            length(Base.catch_stack())
+            length(catch_stack())
         end
     end
     @test test_exc_stack_tailpos() == 1
-    @test length(Base.catch_stack()) == 0
+    @test length(catch_stack()) == 0
 end
 
 @testset "Exception stacks and gotos" begin
@@ -60,7 +60,7 @@ end
         try
             error("A")
         catch
-            @test length(Base.catch_stack()) == 1
+            @test length(catch_stack()) == 1
             return
         end
     end
@@ -69,7 +69,7 @@ end
         try
             error("A")
         catch
-            @test length(Base.catch_stack()) == 1
+            @test length(catch_stack()) == 1
             break
         end
     end
@@ -77,18 +77,18 @@ end
         try
             error("A")
         catch
-            @test length(Base.catch_stack()) == 1
+            @test length(catch_stack()) == 1
             continue
         end
     end
     try
         error("A")
     catch
-        @test length(Base.catch_stack()) == 1
+        @test length(catch_stack()) == 1
         @goto outofcatch
     end
     @label outofcatch
-    @test length(Base.catch_stack()) == 0
+    @test length(catch_stack()) == 0
 end
 
 @testset "Deep exception stacks" begin
@@ -106,9 +106,9 @@ end
     @test try
         test_exc_stack_deep(100)
     catch
-        length(Base.catch_stack())
+        length(catch_stack())
     end == 100
-    @test length(Base.catch_stack()) == 0
+    @test length(catch_stack()) == 0
 end
 
 @testset "Exception stacks and Task switching" begin
@@ -125,10 +125,10 @@ end
         @test t.state == :done
         @test t.result == ErrorException("B")
         # Task exception state is preserved around task switches
-        @test length(Base.catch_stack()) == 1
-        @test Base.catch_stack()[1][1] == ErrorException("A")
+        @test length(catch_stack()) == 1
+        @test catch_stack()[1][1] == ErrorException("A")
     end
-    @test length(Base.catch_stack()) == 0
+    @test length(catch_stack()) == 0
     # test rethrow() rethrows correct state
     bt = []
     try
@@ -151,7 +151,7 @@ end
         @test exc == ErrorException("A")
         @test bt == catch_backtrace()
     end
-    @test length(Base.catch_stack()) == 0
+    @test length(catch_stack()) == 0
     # test rethrow with argument
     bt = []
     try
@@ -173,7 +173,7 @@ end
         @test exc == ErrorException("C")
         @test bt == catch_backtrace()
     end
-    @test length(Base.catch_stack()) == 0
+    @test length(catch_stack()) == 0
 end
 
 @testset "rethrow" begin
