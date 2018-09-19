@@ -503,6 +503,16 @@
              (skip-multiline-comment port 1))
       (skip-to-eol port)))
 
+(define (skip-line-continuation port)
+  (read-char port) ; Consume ⤸
+  (let ((c (peek-char port)))
+    (if (eof-object? c)
+        (error "incomplete: Line continuation '⤸' is last character in file")) ; NOTE: changing this may affect code in base/client.jl
+    (if (not (eqv? c #\newline))
+        (error (string "Line continuation '⤸' must be followed by a newline. Got \"⤸"
+                       c "\" instead"))))
+  (read-char port))
+
 (define (skip-ws-and-comments port)
   (skip-ws port #t)
   (if (eqv? (peek-char port) #\#)
@@ -530,6 +540,7 @@
           ((string.find "0123456789" c)   (read-number port #f #f))
 
           ((eqv? c #\#)                   (skip-comment port) (next-token port s))
+          ((eqv? c #\⤸)                   (skip-line-continuation port) (next-token port s))
 
           ;; . is difficult to handle; it could start a number or operator
           ((and (eqv? c #\.)

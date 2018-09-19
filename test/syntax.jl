@@ -1719,6 +1719,11 @@ let g = @foo28900 f28900(kwarg = x->2x)
     @test g(10) == 20
 end
 
+# Line continuation - issue #27533
+@test Meta.parse("x ⤸\n = 1") == :(x = 1)
+@test Meta.parse("@f ⤸\n a") == Expr(:macrocall, Symbol("@f"), LineNumberNode(1, :none), :a)
+@test Meta.isexpr(Meta.parse("x ⤸"), :incomplete)
+
 # issue #26037
 x26037() = 10
 function test_26037()
